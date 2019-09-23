@@ -1,0 +1,4 @@
+---
+title: Architecture
+type: docs
+---

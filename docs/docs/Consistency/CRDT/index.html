@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>C R D T | Architecture</title>
+
+
+<link rel="stylesheet" href="/Architecture/book.min.79de1f7861b0c98f453c0a93bebf3608a280809e417787746c373699639900d7.css">
+
+
+
+
+<link rel="icon" href="/Architecture/favicon.png" type="image/x-icon">
+
+
+<link rel="alternate" type="application/rss+xml" href="https://hello-world-example.github.io/Architecture/docs/Consistency/CRDT/index.xml" title="Architecture" />
+<!--
+Made with Book Theme
+https://github.com/alex-shpak/hugo-book
+-->
+
+  
+</head>
+
+<body>
+  <input type="checkbox" style="display: none" id="menu-control" />
+  <main class="flex container">
+
+    <aside class="book-menu fixed">
+      <nav>
+<h2 class="book-brand">
+  <a href="https://hello-world-example.github.io/Architecture/">Architecture</a>
+</h2>
+
+
+
+
+
+
+    
+  
+  
+  
+
+  <style>
+  nav ul a[href$="\2f Architecture\2f docs\2f Consistency\2f CRDT\2f "] {
+      color: #004ed0;
+  }
+  </style>
+
+<ul>
+<li><strong>EDA</strong>
+
+<ul>
+<li><a href="/Architecture/docs/EDA/Introduction/">事件驱动架构 简介</a></li>
+</ul></li>
+<li><strong>一致性协议</strong>
+
+<ul>
+<li><a href="/Architecture/docs/Consistency/CRDT/">CRDT</a>
+<br /></li>
+</ul></li>
+</ul>
+
+
+
+
+
+
+
+</nav>
+
+
+<script>
+(function() {
+  var menu = document.querySelector("aside.book-menu nav");
+  addEventListener("beforeunload", function(event) {
+    localStorage.setItem("menu.scrollTop", menu.scrollTop);
+  });
+  menu.scrollTop = localStorage.getItem("menu.scrollTop");
+})();
+</script>
+
+    </aside>
+
+    <div class="book-page">
+      <header class="flex align-center justify-between book-header">
+  <label for="menu-control">
+    <img src="/Architecture/svg/menu.svg" alt="Menu" />
+  </label>
+  <strong>C R D T</strong>
+</header>
+
+      
+<article class="markdown">
+
+<h1 id="crdt">CRDT</h1>
+
+<blockquote>
+<p>原文：<a href="https://yq.aliyun.com/articles/635632?utm_content=m_1000015503">CRDT——解决最终一致问题的利器</a></p>
+</blockquote>
+
+<h2 id="概述">概述</h2>
+
+<p><strong>跨数据中心的数据同步</strong> 是企业提升容灾能力的必备手段，对于社交、视频直播、电商以及游戏等访问规模大、业务分布广的行业，跨区域全球部署也愈发重要。</p>
+
+<p>然而面对大型分布式系统, 不免要讨论 <strong>CAP理论</strong>，在跨区域多活的场景下如何取舍？显然 <strong>P(网络分区) 是首要考虑因素</strong>。其次，跨区域部署就是为了提高可用性，而且对于常见的一致性协议，不管是 2PC、Paxos 还是 raft，在此场景下都要做跨区域同步更新，不仅会降低用户体验，在网络分区的时候还会影响可用性，因此 <strong>C必定被排在最后</strong>。那是不是C无法被满足了呢？事实并非如此，退而求其次，最终一致也是一种选择。</p>
+
+<p><code>CRDT</code>(<code>Conflict-Free Replicated Data Type</code>) 是各种基础数据结构最终一致算法的理论总结，能根据一定的规则自动合并，解决冲突，达到强最终一致的效果。</p>
+
+<p>2012年 CAP 理论提出者 Eric Brewer 撰文回顾 CAP 时也提到，<code>C</code> 和 <code>A</code> 并不是完全互斥，建议大家使用 <code>CRDT</code> 来保障一致性。自从被大神打了广告，各种分布式系统和应用均开始尝试 <code>CRDT</code>，<strong>redislabs</strong> 和 <strong>riak</strong> 已经实现多种数据结构，微软的 CosmosDB 也在 azure 上使用 CRDT 作为多活一致性的解决方案。</p>
+
+<h2 id="crdt简介">CRDT简介</h2>
+
+<p>先简单统一一下概念和名词:</p>
+
+<ul>
+<li><code>object</code>: 可以理解为“副本”</li>
+<li><code>operation</code>: 操作接口，由客户端调用，分为两种，读操作 <code>query</code> 和写操作 <code>update</code>
+
+<ul>
+<li><code>query</code>: 查询操作，仅查询本地副本</li>
+<li><code>update</code>: 更新操作，先尝试进行本地副本更新，若更新成功则将本地更新同步至远端副本</li>
+</ul></li>
+<li><code>merge</code>: update 在远端副本的合并操作</li>
+</ul>
+
+<p>一个数据结构符合 CRDT 的条件是 update操作 和 merge 操作需满足 交换律、结合律和幂等律。如果 update 操作本身满足以上三律，merge 操作仅需要对 update 操作进行回放即可，这种形式称为 <strong>op-based CRDT</strong>，最简单的例子是集合求并集。</p>
+
+<p><img src="./images/op-based_CRDT.png" alt="" /></p>
+
+<p>如果 update 操作无法满足条件，则可以考虑同步副本数据，同时附带额外元信息，通过元信息让 update 和merge 操作具备以上三律，这种形式称为 state-based CRDT。让元信息满足条件的方式是让其更新保持 <strong>单调</strong>，这个关系一般被称为 <strong>偏序关系</strong>。举一个简单例子，每次 update 操作都带上时间戳，在 merge 时对本地副本时间戳及同步副本时间戳进行比对，取更新的结果，这样总能保证结果最新并且最终一致，这种方式称为 Last Write Wins：</p>
+
+<p><img src="./images/state-based-CRDT.png" alt="Last Write Wins" /></p>
+
+<p>有两点值得注意的地方：</p>
+
+<ul>
+<li>update 操作无法满足三律，如果能将元信息附加在操作或者增量上，会是一个相对 state-based 方案更优化的选择</li>
+<li>如果同步过程能确保 exactly once的 语义，幂等律条件是可以被放宽掉，比如说加法本身满足交换律结合律但不幂等，如果能保证加法操作只回放一次，其结果还是最终一致的。</li>
+</ul>
+
+<p>有了以上的理论基础后，我们可以看看各种数据结构如何设计，才能满足CRDT，达到最终一致。</p>
+
+<h2 id="crdts一览">CRDTs一览</h2>
+
+<p>以下展示一些典型的CRDT数据结构的例子，每一种数据类型都会给出示意图，必要时给出伪代码说明，证明略过，有兴趣可参见[附录2]。</p>
+
+<h3 id="counter">Counter</h3>
+
+<p>counter 是最简单的例子，为了说明 state-based 和 op-based 的差异，在此分别给出两种形式的描述。</p>
+
+<h4 id="op-based-counter">Op-based counter</h4>
+
+<p>counter 的 op-based 形式支持两种写操作：increment 和 decrement，由于加法天然满足交换律和结合律，所以非常容易实现，直接转发操作即可：</p>
+
+<p><img src="./images/1535631550788-5e65cb27-c097-44a2-bee7-bea8ae8823ec.png" alt="image.png | center | 278x340" /></p>
+
+<p>但要注意的是加法不幂等，所以同步过程中需要保证不丢不重。</p>
+
+<h4 id="g-counter-grow-only-counter">G-Counter (Grow-only Counter)</h4>
+
+<p>counter 的 state-based 形式并非那么的显而易见，为了简化问题，我们先从一个只有 increment 的 counter 开始看起。</p>
+
+<p>由于同步的是全量，如果每个副本单独进行累加，在进行 merge 的时候无法知道每个副本具体累加了多少，更不能简单的取一个 max 作为最终结果，比如 A做一次INCR 1 同时 B做一次INCR 2，副本全量同步之后，A 和 B 都取max 以 2 做为结果并最终一致，但正确的结果应该是 3。</p>
+
+<p>所以一种可行的方式是在每个副本上都使用一个数组保留其它所有副本的值，update 时只操作当前副本在数组中对应项即可，merge 时对数组每一项求 max 进行合并，query 时返回数组的和，即为 counter 的当前结果。</p>
+
+<pre><code>update increment()
+    let g = myID()
+    P[g] := P[g] + 1
+query value(): integer v
+    let v = sum(P)
+merge (X, Y): Z
+    let Z.P[i] = max(X.P[i], Y.P[i]) (i in [0, n - 1])
+</code></pre>
+
+<p><img src="./images/1535631582091-64f791e5-8b70-4951-b998-bd64187c269f.png" alt="image.png | center | 278x340" /></p>
+
+<p>易见 update 和 merge 均能保证单调的递增，所以 G-Counter 是 state-based CRDT。</p>
+
+<h4 id="pn-counter">PN-Counter</h4>
+
+<p>带有 decrement 的 state-based CRDT 也并非像 G-Counter 那样显而易见，带有减法之后，不能满足 update 时单调的偏序关系。 所以正确的方式是构造两个 G-Counter，一个存放 increment 的累加值，一个存放 decrement的累加值。</p>
+
+<h3 id="register">Register</h3>
+
+<p>register 本质是一个 string，仅支持一种写操作 assign。并发 assign 是不存在交换律的，所以需要考虑附加上偏序关系。</p>
+
+<h4 id="last-writer-wins-register-lww-register">Last-Writer-Wins Register (LWW Register)</h4>
+
+<p>一种简单的做法是后assign的覆盖先assign的(last write wins)，方式是每次修改都附带时间戳，update时通过时间戳生成偏序关系，merge时只取较大时间戳附带的结果。示意图前文已经给出。</p>
+
+<h3 id="set">Set</h3>
+
+<p>Set一共有两种写操作，add 和 remove，多节点并发进行add和remove操作是无法满足交换律的, 会产生冲突：</p>
+
+<p><img src="./images/1535631634056-b0ec8165-344a-4033-8c7f-4e6437665944.png" alt="image.png | center | 278x338" /></p>
+
+<p>所以必须附加一些额外信息，可以从一个只做添加的set开始看起。</p>
+
+<h4 id="grow-only-set-g-set">Grow-Only Set (G-Set)</h4>
+
+<p>set的add操作本质上是求并，天然满足交换律、结合律和幂等律, 满足Op-based CRDT：</p>
+
+<blockquote>
+<p>交换律: X U Y = Y U X
+结合律: (X U Y) U Z = X U (Y U Z)</p>
+
+<p>幂等律: X U X = X</p>
+</blockquote>
+
+<h4 id="2p-set">2P-Set</h4>
+
+<p>考虑删除操作，思路和 PN-Counter 一致，使用两个G-Set, set A只负责添加，对于从set A中remove的元素不做实际删除，只是复制到set R中，如下：</p>
+
+<p><img src="./images/1535631654427-e48a704a-db67-421e-a8b8-d5455530fc0b.png" alt="image.png | center | 276x363" /></p>
+
+<p>query时如果元素在set A且不在set R中，则表示该元素存在。</p>
+
+<pre><code>query lookup(e): bool b 
+    let b = (e in A &amp;&amp; e not in R)
+</code></pre>
+
+<p>由于只同步操作，且两个set只添加不减少，易证其为 op-based CRDT。但 2P-Set 十分不实用，一方面已经被删除的元素不能再次被添加，一方面删除的元素还会保留在原set中，占用大量空间。</p>
+
+<h4 id="lww-element-set">LWW-element-Set</h4>
+
+<p>为了解决删除元素不能再次添加的问题，可以考虑给 2P-Set 中 A 和 R 的每个元素加一个更新时间戳，其它操作保持不变，只要在查询的时候做如下处理：</p>
+
+<pre><code>query lookup(e): bool b
+    let b = (t1 &lt; t2): (e, t1) in A &amp;&amp; (e, t2) not in R  
+</code></pre>
+
+<p><img src="./images/1535631681537-2b3a8835-b6ad-4da2-9503-68839902dcdd.png" alt="image.png | center | 277x365" /></p>
+
+<p>一个更优化的实现是不要R集合，而A集合中每一个元素除了维护一个更新时间戳之外，还有一个删除标志位。</p>
+
+<h4 id="observed-remove-set-or-set">Observed-Remove Set (OR-Set)</h4>
+
+<p>还有一种想法不太相同的设计，核心思想是每次add(e)的时候都为元素e加一个唯一的 tag，remove(e) 将当前节点上的所有e和对应的tag都删除，这样在remove(e)同时其它节点又有并发add(e)的情况下e是能够最终保证添加成功，此种语义称为add wins。如图，A上做remove e时仅有A一个tag，所以在C收到A同步过来的remove时，只删除tag A，tag B保留e在C上仍然存在，最终ABC三个节点是一致的，都有e及tag B。</p>
+
+<p><img src="./images/1535631709483-8c818a37-d392-40b5-95b1-deb462ab3bfb.png" alt="image.png | center| 827x342" /></p>
+
+<p>虽然在remove时看似存在并不能保证交换律的删除操作出现，但删除的元素是全局唯一的，所以并不破坏语义，故仍然是为CRDT。</p>
+
+<p><code>OR-Set</code> 相对来说是一种比较实用的结构，但实现上仍然有几个问题要解决：</p>
+
+<ul>
+<li>重复add和remove的场景下会产生大量的tag，空间需要优化</li>
+<li>在考虑空间优化的前提下如何生成全局唯一的tag</li>
+<li>需要考虑如何进行垃圾回收</li>
+</ul>
+
+<p>学术界有多篇论文都是在探讨对此种算法的优化。但 <code>OR-Set</code> 在实践中最严重的问题是一旦同步通道出现延迟或者中断，很可能出现用户认为早已删除掉的字段在同步恢复之后再次出现。从工程实践角度讲，更优化的方案是使用时间戳作为 <code>unique tag</code>，好处是易保证唯一性，同时自带单调递增属性，重复删除添加时不会生成大量tag。</p>
+
+<h2 id="附录">附录</h2>
+
+<ol>
+<li>CRDT: <a href="https://hal.inria.fr/inria-00609399/document">https://hal.inria.fr/inria-00609399/document</a></li>
+<li>CRDT tech report: <a href="https://hal.inria.fr/file/index/docid/555588/filename/techreport.pdf">https://hal.inria.fr/file/index/docid/555588/filename/techreport.pdf</a></li>
+<li>Eric Brewer: <a href="https://www.infoq.com/articles/cap-twelve-years-later-how-the-rules-have-changed">https://www.infoq.com/articles/cap-twelve-years-later-how-the-rules-have-changed</a></li>
+<li>redislabs, Developing Applications with Geo-replicated CRDBs on Redis Enterprise Software(RS): <a href="https://redislabs.com/redis-enterprise-documentation/developing/crdbs/">https://redislabs.com/redis-enterprise-documentation/developing/crdbs/</a></li>
+<li>riak: <a href="https://docs.basho.com/riak/kv/2.0.0/developing/data-types/">https://docs.basho.com/riak/kv/2.0.0/developing/data-types/</a></li>
+<li>cosmosDB: <a href="https://docs.microsoft.com/en-us/azure/cosmos-db/multi-region-writers">https://docs.microsoft.com/en-us/azure/cosmos-db/multi-region-writers</a></li>
+</ol>
+
+<h2 id="read-more">Read More</h2>
+
+<ul>
+<li><a href="https://www.jdon.com/artichect/crdt.html">分布式CRDT模型</a></li>
+</ul>
+</article>
+
+      
+<div class="book-footer justify-end">
+  
+  
+  <div>
+    <a href="https://github.com/hello-world-example/Architecture/edit/master/HuGo/content/docs/Consistency/CRDT/_index.md" target="_blank" rel="noopener">
+      <img src="/Architecture/svg/edit.svg" alt="Edit" /> Edit this page
+    </a>
+  </div>
+  
+</div>
+
+
+      
+    </div>
+
+    
+  
+
+  <aside class="book-toc level-3 fixed">
+    <nav id="TableOfContents">
+<ul>
+<li><a href="#crdt">CRDT</a>
+<ul>
+<li><a href="#概述">概述</a></li>
+<li><a href="#crdt简介">CRDT简介</a></li>
+<li><a href="#crdts一览">CRDTs一览</a>
+<ul>
+<li><a href="#counter">Counter</a>
+<ul>
+<li><a href="#op-based-counter">Op-based counter</a></li>
+<li><a href="#g-counter-grow-only-counter">G-Counter (Grow-only Counter)</a></li>
+<li><a href="#pn-counter">PN-Counter</a></li>
+</ul></li>
+<li><a href="#register">Register</a>
+<ul>
+<li><a href="#last-writer-wins-register-lww-register">Last-Writer-Wins Register (LWW Register)</a></li>
+</ul></li>
+<li><a href="#set">Set</a>
+<ul>
+<li><a href="#grow-only-set-g-set">Grow-Only Set (G-Set)</a></li>
+<li><a href="#2p-set">2P-Set</a></li>
+<li><a href="#lww-element-set">LWW-element-Set</a></li>
+<li><a href="#observed-remove-set-or-set">Observed-Remove Set (OR-Set)</a></li>
+</ul></li>
+</ul></li>
+<li><a href="#附录">附录</a></li>
+<li><a href="#read-more">Read More</a></li>
+</ul></li>
+</ul>
+</nav>
+  </aside>
+
+
+
+  </main>
+  
+  
+  
+</body>
+
+</html>
